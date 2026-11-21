@@ -204,7 +204,7 @@ export default function Home() {
       points: [getPoint(event)],
       color,
       width: brush,
-      tool
+      tool: tool as Stroke['tool']
     });
   };
 
