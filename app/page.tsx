@@ -14,13 +14,16 @@ const palette = [
   '#ff5722', '#795548', '#a1887f', '#000000'
 ];
 
-const tools: { id: Tool; label: string }[] = [
+const toolChoices: { id: Tool; label: string }[] = [
   { id: 'pencil', label: '✏️ 鉛筆' },
   { id: 'pen', label: '🖊️ ペン' },
   { id: 'brush', label: '🖌️ 筆' },
   { id: 'marker', label: '🖍️ マーカー' },
   { id: 'eraser', label: '🧽 消しゴム' }
 ];
+
+const canvasWidth = 900;
+const canvasHeight = 600;
 
 function getStrokeStyle(stroke: Stroke) {
   return {
@@ -50,50 +53,76 @@ export default function Home() {
   const [brush, setBrush] = useState(5);
   const [tool, setTool] = useState<Tool>('pen');
   const [remaining, setRemaining] = useState(0);
+  const [draft, setDraft] = useState<Stroke | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const drawing = useRef(false);
-  const current = useRef<Point[]>([]);
+  const drawingRef = useRef(false);
 
-  const send = useCallback((data: object) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(data));
+  const send = useCallback((message: object) => {
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(message));
+    } else {
+      setError('サーバーに接続されていません。ページを再読み込みしてください。');
     }
   }, []);
 
   useEffect(() => {
-    const ws = new WebSocket(
-      `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/ws`
-    );
-
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/api/ws`);
     wsRef.current = ws;
 
-    ws.onopen = () => setConnected(true);
-
-    ws.onclose = () => {
-      setConnected(false);
-      setError('サーバーとの接続が切れました。ページを再読み込みしてください');
+    ws.onopen = () => {
+      setConnected(true);
+      setError('');
     };
 
-    ws.onerror = () => setError('通信エラーが発生しました');
-
     ws.onmessage = (event) => {
-      const data = JSON.parse(event.data) as ServerMessage;
+      try {
+        const message = JSON.parse(event.data) as ServerMessage;
 
-      if (data.type === 'error') {
-        setError(data.message);
-      } else {
-        setError('');
-        setRoom(data.state);
-        setSelfId(data.selfId);
+        if (message.type === 'state') {
+          setRoom(message.state);
+          setSelfId(message.selfId);
+          setError('');
+        } else if (message.type === 'error') {
+          setError(message.message);
+        }
+      } catch {
+        setError('サーバーからのデータを読み取れませんでした。');
       }
     };
 
-    return () => ws.close();
+    ws.onclose = () => {
+      setConnected(false);
+    };
+
+    ws.onerror = () => {
+      setError('サーバーとの接続に失敗しました。');
+    };
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
   }, []);
 
-  // みんなの絵をキャンバスに表示
+  useEffect(() => {
+    if (!room || room.status !== 'playing' || !room.deadline) {
+      setRemaining(0);
+      return;
+    }
+
+    const update = () => {
+      setRemaining(Math.max(0, Math.ceil((room.deadline! - Date.now()) / 1000)));
+    };
+
+    update();
+    const timer = window.setInterval(update, 250);
+    return () => window.clearInterval(timer);
+  }, [room?.deadline, room?.status, room]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -101,14 +130,19 @@ export default function Home() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    for (const stroke of room?.strokes ?? []) {
+    const allStrokes = draft
+      ? [...(room?.strokes ?? []), draft]
+      : room?.strokes ?? [];
+
+    for (const stroke of allStrokes) {
       if (!stroke.points.length) continue;
 
       const style = getStrokeStyle(stroke);
-
-      ctx.beginPath();
+      ctx.save();
       ctx.strokeStyle = style.color;
       ctx.fillStyle = style.color;
       ctx.lineWidth = style.width;
@@ -116,449 +150,409 @@ export default function Home() {
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
-      ctx.moveTo(
-        stroke.points[0].x * canvas.width,
-        stroke.points[0].y * canvas.height
-      );
-
-      for (const p of stroke.points.slice(1)) {
-        ctx.lineTo(p.x * canvas.width, p.y * canvas.height);
-      }
-
       if (stroke.points.length === 1) {
+        ctx.beginPath();
         ctx.arc(
-          stroke.points[0].x * canvas.width,
-          stroke.points[0].y * canvas.height,
+          stroke.points[0].x,
+          stroke.points[0].y,
           style.width / 2,
           0,
           Math.PI * 2
         );
         ctx.fill();
       } else {
+        ctx.beginPath();
+        ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+
+        for (let i = 1; i < stroke.points.length; i++) {
+          ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+        }
+
         ctx.stroke();
       }
 
-      ctx.globalAlpha = 1;
+      ctx.restore();
     }
-  }, [room]);
+  }, [room?.strokes, draft]);
 
-  // 残り時間
-  useEffect(() => {
-    if (!room?.deadline || room.status !== 'playing') {
-      setRemaining(0);
-      return;
-    }
-
-    const tick = () => {
-      setRemaining(
-        Math.max(0, Math.ceil((room.deadline! - Date.now()) / 1000))
-      );
-    };
-
-    tick();
-
-    const timer = setInterval(tick, 200);
-    return () => clearInterval(timer);
-  }, [room?.deadline, room?.status]);
-
-  const active = !!room &&
+  const isMyTurn =
+    !!room &&
     room.status === 'playing' &&
     room.players[room.turnIndex]?.id === selfId &&
     !room.finishedPlayerIds.includes(selfId);
 
-  const completed = room?.finishedPlayerIds.includes(selfId) ?? false;
+  const myPlayer = room?.players.find(player => player.id === selfId);
 
-  const getPoint = (e: React.PointerEvent<HTMLCanvasElement>): Point => {
-    const rect = e.currentTarget.getBoundingClientRect();
+  const getPoint = (event: React.PointerEvent<HTMLCanvasElement>): Point => {
+    const canvas = canvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
 
     return {
-      x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
-      y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height))
+      x: ((event.clientX - rect.left) / rect.width) * canvasWidth,
+      y: ((event.clientY - rect.top) / rect.height) * canvasHeight
     };
   };
 
-  const pointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!active) return;
+  const pointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isMyTurn) return;
 
-    e.currentTarget.setPointerCapture(e.pointerId);
-    drawing.current = true;
-    current.current = [getPoint(e)];
-  };
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drawingRef.current = true;
 
-  // 線を描く
-  const pointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!drawing.current || !active) return;
-
-    const p = getPoint(e);
-    current.current.push(p);
-
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
-
-    const style = getStrokeStyle({
-      points: current.current,
+    setDraft({
+      points: [getPoint(event)],
       color,
       width: brush,
       tool
     });
-
-    const pts = current.current;
-
-    ctx.beginPath();
-    ctx.strokeStyle = style.color;
-    ctx.fillStyle = style.color;
-    ctx.lineWidth = style.width;
-    ctx.globalAlpha = style.alpha;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    if (pts.length === 1) {
-      ctx.arc(
-        p.x * 900,
-        p.y * 520,
-        style.width / 2,
-        0,
-        Math.PI * 2
-      );
-      ctx.fill();
-    } else {
-      ctx.moveTo(
-        pts[pts.length - 2].x * 900,
-        pts[pts.length - 2].y * 520
-      );
-      ctx.lineTo(p.x * 900, p.y * 520);
-      ctx.stroke();
-    }
-
-    ctx.globalAlpha = 1;
   };
 
-  // 描いた線をサーバーに送信
+  const pointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!drawingRef.current || !isMyTurn) return;
+
+    event.preventDefault();
+    const point = getPoint(event);
+
+    setDraft(previous => {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        points: [...previous.points, point]
+      };
+    });
+  };
+
   const pointerUp = () => {
-    if (!drawing.current) return;
+    if (!drawingRef.current) return;
 
-    drawing.current = false;
+    drawingRef.current = false;
 
-    if (current.current.length) {
-      send({
-        type: 'stroke',
-        stroke: {
-          points: current.current,
-          color,
-          width: brush,
-          tool
-        } satisfies Stroke
-      });
-    }
-
-    current.current = [];
+    setDraft(previous => {
+      if (previous && previous.points.length > 0) {
+        send({ type: 'stroke', stroke: previous });
+      }
+      return null;
+    });
   };
 
-  const create = () => {
+  const createRoom = () => {
     if (!name.trim()) {
-      setError('先に名前を入力してください');
+      setError('名前を入力してください');
       return;
     }
 
-    send({ type: 'create', name: name.trim(), seconds });
+    send({ type: 'create', name, seconds });
   };
 
-  const join = () => {
+  const joinRoom = () => {
     if (!name.trim()) {
-      setError('先に名前を入力してください');
+      setError('名前を入力してください');
       return;
     }
 
-    if (!/^\d{4}$/.test(codeInput)) {
+    if (codeInput.length !== 4) {
       setError('4桁の部屋番号を入力してください');
       return;
     }
 
-    send({ type: 'join', name: name.trim(), code: codeInput });
+    send({ type: 'join', code: codeInput, name });
   };
 
-  const leave = () => {
+  const leaveRoom = () => {
     send({ type: 'leave' });
     setRoom(null);
+    setSelfId('');
+    setDraft(null);
   };
+
+  const startGame = () => {
+    send({ type: 'start' });
+  };
+
+  const completeGame = () => {
+    if (window.confirm('完成にしますか？完成すると、もう描けなくなります。')) {
+      send({ type: 'complete' });
+    }
+  };
+
+  const clearCanvas = () => {
+    if (window.confirm('キャンバスを白紙にしますか？')) {
+      send({ type: 'clear' });
+    }
+  };
+
+  const formatTime = (value: number) => {
+    const minutes = Math.floor(value / 60);
+    const secs = value % 60;
+    return `${minutes}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const styles = `
+    * { box-sizing: border-box; }
+    .page { min-height: 100vh; background: #f3f4f6; color: #202124; padding: 20px 14px 40px; font-family: Arial, sans-serif; }
+    .container { max-width: 900px; margin: 0 auto; }
+    .title { text-align: center; font-size: 30px; font-weight: 800; margin: 12px 0 8px; }
+    .subtitle { text-align: center; color: #666; margin-bottom: 22px; }
+    .panel { background: white; border-radius: 16px; padding: 20px; margin: 14px 0; box-shadow: 0 2px 8px #0000000d; }
+    .field { width: 100%; padding: 13px; border: 1px solid #ccc; border-radius: 9px; font-size: 16px; margin: 8px 0 14px; }
+    .button { border: 0; border-radius: 9px; padding: 12px 16px; font-size: 16px; font-weight: 700; cursor: pointer; }
+    .primary { background: #2563eb; color: white; }
+    .secondary { background: #e5e7eb; color: #202124; }
+    .danger { background: #dc2626; color: white; }
+    .button:disabled { opacity: .4; cursor: not-allowed; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .grow { flex: 1; }
+    .room-code { font-size: 34px; font-weight: 800; letter-spacing: 8px; text-align: center; padding: 12px; }
+    .players { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+    .player { padding: 12px; border-radius: 9px; background: #f3f4f6; }
+    .active-player { background: #dbeafe; outline: 2px solid #2563eb; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+    .tool-button { padding: 9px 11px; border: 1px solid #ddd; background: white; border-radius: 8px; cursor: pointer; }
+    .tool-selected { border: 2px solid #2563eb; background: #eff6ff; }
+    .palette { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 7px; margin: 12px 0; }
+    .swatch { width: 100%; aspect-ratio: 1; border: 2px solid #ddd; border-radius: 7px; cursor: pointer; }
+    .swatch-selected { outline: 3px solid #2563eb; outline-offset: 2px; }
+    .canvas-wrap { width: 100%; background: white; border: 2px solid #d1d5db; border-radius: 10px; overflow: hidden; touch-action: none; }
+    .canvas { display: block; width: 100%; height: auto; touch-action: none; cursor: crosshair; }
+    .timer { font-size: 30px; font-weight: 800; text-align: center; }
+    .error { color: #dc2626; text-align: center; font-weight: 700; margin: 12px 0; }
+    .status { text-align: center; font-weight: 700; margin: 12px 0; }
+    @media (max-width: 500px) {
+      .page { padding: 12px 9px 30px; }
+      .panel { padding: 14px; }
+      .title { font-size: 25px; }
+      .palette { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+      .room-code { font-size: 28px; }
+    }
+  `;
 
   return (
     <main className="page">
-      <header className="top">
-        <div className="logo">✏️</div>
-        <div>
-          <h1>おえかきリレー</h1>
-          <p>みんなで1枚の絵をつなごう！</p>
+      <style>{styles}</style>
+      <div className="container">
+        <h1 className="title">🎨 イラスト交換ゲーム</h1>
+        <p className="subtitle">みんなで絵をつないで完成させよう！</p>
+
+        <div className="status">
+          {connected ? '🟢 サーバーに接続中' : '🔴 接続していません'}
         </div>
-        <span className={`connection ${connected ? 'on' : ''}`}>
-          {connected ? '接続中' : '接続中...'}
-        </span>
-      </header>
 
-      {error && <div className="error">{error}</div>}
+        {error && <p className="error">{error}</p>}
 
-      {!room ? (
-        <section className="lobby card">
-          <div className="intro">
-            <div className="heroIcon">🎨</div>
-            <h2>友達とおえかきリレー！</h2>
-            <p>部屋を作って、4桁の番号を友達に教えよう。</p>
-          </div>
+        {!room && (
+          <section className="panel">
+            <h2>ゲームに参加</h2>
 
-          <label>
-            あなたの名前
+            <label htmlFor="player-name">プレイヤー名</label>
             <input
+              id="player-name"
+              className="field"
               value={name}
-              onChange={e => setName(e.target.value)}
+              onChange={event => setName(event.target.value)}
               maxLength={16}
               placeholder="名前を入力"
             />
-          </label>
 
-          <div className="createBox">
             <h3>部屋を作る</h3>
-            <label>
-              1人あたりの制限時間
-              <select
-                value={seconds}
-                onChange={e => setSeconds(Number(e.target.value))}
-              >
-                <option value={60}>1分</option>
-                <option value={120}>2分</option>
-                <option value={180}>3分</option>
-                <option value={300}>5分</option>
-                <option value={600}>10分</option>
-              </select>
-            </label>
-            <button className="primary" onClick={create} disabled={!connected}>
+            <label htmlFor="time-select">1人あたりのお絵描き時間</label>
+            <select
+              id="time-select"
+              className="field"
+              value={seconds}
+              onChange={event => setSeconds(Number(event.target.value))}
+            >
+              <option value={60}>1分</option>
+              <option value={120}>2分</option>
+              <option value={180}>3分</option>
+              <option value={300}>5分</option>
+              <option value={600}>10分</option>
+            </select>
+
+            <button className="button primary grow" onClick={createRoom} disabled={!connected}>
               部屋を作成する
             </button>
-          </div>
 
-          <div className="joinBox">
-            <h3>友達の部屋に参加する</h3>
-            <p className="muted">
-              部屋を作った人から4桁の番号を教えてもらってね。
-            </p>
+            <hr style={{ margin: '22px 0', border: 0, borderTop: '1px solid #ddd' }} />
+
+            <h3>部屋番号で参加</h3>
             <input
-              className="codeInput"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={4}
+              className="field"
               value={codeInput}
-              onChange={e =>
-                setCodeInput(e.target.value.replace(/\D/g, '').slice(0, 4))
-              }
-              placeholder="例：1234"
-              aria-label="4桁の部屋番号"
+              onChange={event => setCodeInput(event.target.value.replace(/\D/g, '').slice(0, 4))}
+              placeholder="4桁の部屋番号"
+              inputMode="numeric"
+              maxLength={4}
             />
             <button
-              className="secondary"
-              onClick={join}
-              disabled={!connected || codeInput.length !== 4 || !name.trim()}
+              className="button primary"
+              onClick={joinRoom}
+              disabled={!connected || codeInput.length !== 4}
+              style={{ width: '100%' }}
             >
-              この番号の部屋に入る
+              部屋に入る
             </button>
-          </div>
+          </section>
+        )}
 
-          <p className="smallNote">最大4人・ランダムマッチングなし</p>
-        </section>
-      ) : (
-        <section className="game">
-          <div className="roomBar card">
-            <div>
-              <span className="muted">部屋番号</span>
-              <strong className="roomCode">{room.code}</strong>
-            </div>
-            <button
-              className="copy"
-              onClick={() => navigator.clipboard?.writeText(room.code)}
-            >
-              番号をコピー
-            </button>
-            <button className="leave" onClick={leave}>退出</button>
-          </div>
-
-          <div className="card players">
-            <div className="playersTitle">
-              <h2>参加メンバー</h2>
-              <span>{room.players.length}/4人</span>
-            </div>
-
-            <div className="playerList">
-              {room.players.map((p, i) => (
-                <div
-                  className={`player ${
-                    room.status === 'playing' && i === room.turnIndex ? 'turn' : ''
-                  }`}
-                  key={p.id}
-                >
-                  <span className="playerNum">{i + 1}</span>
-                  <span>
-                    {p.name}
-                    {p.id === room.hostId ? ' 👑' : ''}
-                    {p.id === selfId ? '（あなた）' : ''}
-                  </span>
-                  {room.finishedPlayerIds.includes(p.id) && <b>完成済み ✓</b>}
-                  {room.status === 'playing' &&
-                    i === room.turnIndex &&
-                    !room.finishedPlayerIds.includes(p.id) && <b>描く番！</b>}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {room.status === 'waiting' && (
-            <div className="card waiting">
-              <div className="waitIcon">🖍️</div>
-              <h2>友達を待っています</h2>
-              <p>部屋番号 <b>{room.code}</b> を友達に教えてね。</p>
-
-              {room.hostId === selfId ? (
-                <button
-                  className="primary"
-                  disabled={room.players.length < 2}
-                  onClick={() => send({ type: 'start' })}
-                >
-                  ゲームスタート
-                </button>
-              ) : (
-                <p className="muted">部屋の作成者がゲームを開始します</p>
-              )}
-
-              {room.players.length < 2 && <small>あと1人参加すると開始できます</small>}
-            </div>
-          )}
-
-          {room.status !== 'waiting' && (
-            <>
-              <div className="turnInfo card">
-                <div>
-                  <span className="muted">
-                    {room.status === 'finished'
-                      ? 'ゲーム終了'
-                      : `${room.turnIndex + 1}人目のターン`}
-                  </span>
-                  <strong>
-                    {room.status === 'finished'
-                      ? '完成！'
-                      : completed
-                        ? 'あなたは完成済み！'
-                        : `${room.players[room.turnIndex]?.name} さん`}
-                  </strong>
-                </div>
-
-                <div className="time">
-                  {room.status === 'finished' ? '🎉' : `${remaining}秒`}
-                </div>
-
-                {active && (
-                  <>
-                    <button
-                      className="secondary smallButton"
-                      onClick={() => send({ type: 'finishTurn' })}
-                    >
-                      次の人へ
-                    </button>
-                    <button
-                      className="primary smallButton"
-                      onClick={() => send({ type: 'complete' })}
-                    >
-                      🎉 完成！
-                    </button>
-                  </>
-                )}
-
-                {completed && <span>完成済み ✓</span>}
+        {room && (
+          <>
+            <section className="panel">
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <strong>部屋番号</strong>
+                <button className="button secondary" onClick={leaveRoom}>退出する</button>
               </div>
 
-              <div className="card canvasCard">
-                <div className="canvasHead">
-                  <strong>
-                    {active
-                      ? 'あなたの番です！描いてね'
-                      : room.status === 'finished'
-                        ? 'みんなの絵が完成！'
-                        : completed
-                          ? 'あなたは完成しました！'
-                          : 'ほかの人が描いています'}
-                  </strong>
-                  <span>前の人の絵に重ねて描こう</span>
-                </div>
+              <div className="room-code">{room.code}</div>
+              <p style={{ textAlign: 'center', color: '#666' }}>
+                この番号を友達に教えてね！
+              </p>
 
-                <canvas
-                  ref={canvasRef}
-                  width={900}
-                  height={520}
-                  className={!active ? 'canvas disabledCanvas' : 'canvas'}
-                  onPointerDown={pointerDown}
-                  onPointerMove={pointerMove}
-                  onPointerUp={pointerUp}
-                  onPointerCancel={pointerUp}
-                />
+              <h3>参加プレイヤー（{room.players.length}/4人）</h3>
+              <div className="players">
+                {room.players.map((player, index) => (
+                  <div
+                    key={player.id}
+                    className={`player ${room.status === 'playing' && room.players[room.turnIndex]?.id === player.id ? 'active-player' : ''}`}
+                  >
+                    <strong>{player.name}</strong>
+                    {player.id === room.hostId && <span> 👑</span>}
+                    {player.id === selfId && <span>（自分）</span>}
+                    {room.finishedPlayerIds.includes(player.id) && <div>✅ 完成</div>}
+                    {room.status === 'playing' && room.players[room.turnIndex]?.id === player.id && <div>✏️ 描画中</div>}
+                  </div>
+                ))}
+              </div>
 
-                {active && (
-                  <div className="tools">
-                    <div className="colors">
-                      {palette.map(c => (
-                        <button
-                          key={c}
-                          aria-label={c}
-                          className={`swatch ${color === c ? 'selected' : ''}`}
-                          style={{ background: c }}
-                          onClick={() => setColor(c)}
-                        />
-                      ))}
-                    </div>
-
-                    <div className="toolChoices">
-                      {tools.map(t => (
-                        <button
-                          key={t.id}
-                          className="secondary smallButton"
-                          onClick={() => setTool(t.id)}
-                          style={{
-                            border: tool === t.id ? '3px solid #2563eb' : undefined,
-                            fontWeight: tool === t.id ? 'bold' : 'normal'
-                          }}
-                        >
-                          {t.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    <label className="brushLabel">
-                      太さ
-                      <input
-                        type="range"
-                        min="2"
-                        max="18"
-                        value={brush}
-                        onChange={e => setBrush(Number(e.target.value))}
-                      />
-                    </label>
-
+              {room.status === 'waiting' && (
+                <div style={{ textAlign: 'center', marginTop: 20 }}>
+                  <p>制限時間：{room.seconds / 60}分</p>
+                  {room.hostId === selfId ? (
                     <button
-                      className="undo"
-                      onClick={() => send({ type: 'clear' })}
+                      className="button primary"
+                      onClick={startGame}
+                      disabled={room.players.length < 2}
                     >
-                      全部消す
+                      ゲーム開始（2人以上）
+                    </button>
+                  ) : (
+                    <p>ホストがゲームを開始するまで待ってね！</p>
+                  )}
+                </div>
+              )}
+            </section>
+
+            {room.status === 'playing' && (
+              <>
+                <section className="panel">
+                  <div className="timer">⏱ {formatTime(remaining)}</div>
+                  <p className="status">
+                    {isMyTurn
+                      ? 'あなたの番です！絵を描こう！'
+                      : room.finishedPlayerIds.includes(selfId)
+                        ? 'あなたは完成済みです。みんなの完成を待とう！'
+                        : `${room.players[room.turnIndex]?.name ?? ''} さんがお絵描き中`}
+                  </p>
+                </section>
+
+                <section className="panel">
+                  <h3>ペンの種類</h3>
+                  <div className="toolbar">
+                    {toolChoices.map(choice => (
+                      <button
+                        key={choice.id}
+                        className={`tool-button ${tool === choice.id ? 'tool-selected' : ''}`}
+                        onClick={() => setTool(choice.id)}
+                        disabled={!isMyTurn}
+                      >
+                        {choice.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <h3>色</h3>
+                  <div className="palette">
+                    {palette.map(item => (
+                      <button
+                        key={item}
+                        title={item}
+                        aria-label={`色 ${item}`}
+                        className={`swatch ${color === item ? 'swatch-selected' : ''}`}
+                        style={{ background: item }}
+                        onClick={() => setColor(item)}
+                        disabled={!isMyTurn}
+                      />
+                    ))}
+                  </div>
+
+                  <div className="row">
+                    <label htmlFor="brush-size">線の太さ：{brush}</label>
+                    <input
+                      id="brush-size"
+                      type="range"
+                      min="1"
+                      max="20"
+                      value={brush}
+                      onChange={event => setBrush(Number(event.target.value))}
+                      disabled={!isMyTurn}
+                      className="grow"
+                    />
+                  </div>
+
+                  <div className="canvas-wrap" style={{ marginTop: 16 }}>
+                    <canvas
+                      ref={canvasRef}
+                      className="canvas"
+                      width={canvasWidth}
+                      height={canvasHeight}
+                      onPointerDown={pointerDown}
+                      onPointerMove={pointerMove}
+                      onPointerUp={pointerUp}
+                      onPointerCancel={pointerUp}
+                      onLostPointerCapture={pointerUp}
+                    />
+                  </div>
+
+                  <div className="row" style={{ marginTop: 14 }}>
+                    <button
+                      className="button secondary grow"
+                      onClick={clearCanvas}
+                      disabled={!isMyTurn}
+                    >
+                      キャンバスを白紙にする
+                    </button>
+                    <button
+                      className="button primary grow"
+                      onClick={completeGame}
+                      disabled={!isMyTurn}
+                    >
+                      完成！
                     </button>
                   </div>
-                )}
+                </section>
+              </>
+            )}
 
-                {room.status === 'finished' && (
-                  <button className="primary" onClick={leave}>
-                    ロビーに戻る
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </section>
-      )}
-
-      <footer>おえかきリレー · 試作版</footer>
+            {room.status === 'finished' && (
+              <section className="panel" style={{ textAlign: 'center' }}>
+                <h2>🎉 ゲーム終了！</h2>
+                <p>みんなで絵を完成させたよ！</p>
+                <div className="canvas-wrap" style={{ margin: '16px 0' }}>
+                  <canvas
+                    ref={canvasRef}
+                    className="canvas"
+                    width={canvasWidth}
+                    height={canvasHeight}
+                  />
+                </div>
+                <button className="button secondary" onClick={leaveRoom}>
+                  部屋を退出する
+                </button>
+              </section>
+            )}
+          </>
+        )}
+      </div>
     </main>
   );
 }
