@@ -179,7 +179,8 @@ ctx.lineJoin = 'round';
           color,
           width: brush,
           tool
-        }satisfies Stroke
+        }
+          satisfies Stroke
       });
     }
 
