@@ -180,7 +180,7 @@ ctx.lineJoin = 'round';
           width: brush,
           tool
         } 
-          satisfies Stroke
+           satisfies Stroke
       });
     }
 
