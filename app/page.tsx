@@ -2,7 +2,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RoomState, ServerMessage, Stroke, Point } from '@/lib/protocol';
 
-const palette = ['#202124', '#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#8e24aa', '#ffffff'];
+const palette = [
+  '#202124', '#757575', '#bdbdbd', '#ffffff',
+  '#e53935', '#ff5252', '#f06292', '#9c27b0',
+  '#673ab7', '#3f51b5', '#2196f3', '#03a9f4',
+  '#00bcd4', '#009688', '#4caf50', '#8bc34a',
+  '#cddc39', '#ffeb3b', '#ffc107', '#ff9800',
+  '#ff5722', '#795548', '#a1887f', '#000000'
+];
 
 export default function Home() {
   const [name, setName] = useState('');
