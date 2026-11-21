@@ -21,6 +21,7 @@ export default function Home() {
   const [connected, setConnected] = useState(false);
   const [color, setColor] = useState('#202124');
   const [brush, setBrush] = useState(5);
+  const [tool, setTool] = useState('pen');
   const [remaining, setRemaining] = useState(0);
 
   const wsRef = useRef<WebSocket | null>(null);
