@@ -417,4 +417,4 @@ ctx.lineJoin = 'round';
 
     <footer>おえかきリレー · 試作版</footer>
   </main>;
-    }
+}
