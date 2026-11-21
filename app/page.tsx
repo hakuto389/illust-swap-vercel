@@ -139,10 +139,21 @@ export default function Home() {
     const pts = current.current;
 
     ctx.beginPath();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = brush;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    ctx.strokeStyle = tool === 'eraser' ? '#ffffff' : color;
+ctx.lineWidth =
+  tool === 'pencil' ? brush * 0.6 :
+  tool === 'marker' ? brush * 2 :
+  tool === 'eraser' ? brush * 3 :
+  tool === 'brush' ? brush * 1.5 :
+  brush;
+
+ctx.globalAlpha =
+  tool === 'pencil' ? 0.65 :
+  tool === 'marker' ? 0.4 :
+  1;
+
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
 
     if (pts.length === 1) {
       ctx.arc(p.x * 900, p.y * 520, brush / 2, 0, Math.PI * 2);
