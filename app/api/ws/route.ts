@@ -1,4 +1,3 @@
-
 import { experimental_upgradeWebSocket, type WebSocketData } from '@vercel/functions';
 import type { ClientMessage, Player, RoomState, ServerMessage } from '@/lib/protocol';
 
