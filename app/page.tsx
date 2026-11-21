@@ -175,12 +175,12 @@ ctx.lineJoin = 'round';
       send({
         type: 'stroke',
         stroke: {
-          points: current.current,
-          color,
-          width: brush,
-          tool
+  points: current.current,
+  color,
+  width: brush,
+  tool
         }
-          satisfies Stroke
+        }satisfies Stroke
       });
     }
 
