@@ -6,7 +6,6 @@ export type Stroke = {
   width: number;
   tool: 'pencil' | 'pen' | 'brush' | 'marker' | 'eraser';
 };
-
 export type Player = {
   id: string;
   name: string;
