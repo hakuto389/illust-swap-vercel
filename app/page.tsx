@@ -172,19 +172,19 @@ ctx.lineJoin = 'round';
     drawing.current = false;
 
     if (current.current.length) {
-      send({
-        type: 'stroke',
-        stroke: {
-          points: current.current,
-          color,
-          width: brush,
-          tool
-        } satisfies Stroke
-      });
-    }
+  send({
+    type: 'stroke',
+    stroke: {
+      points: current.current,
+      color,
+      width: brush,
+      tool
+    } satisfies Stroke
+  });
+}
 
-    current.current = [];
-  };
+current.current = [];
+};
 
   const create = () => {
     if (!name.trim()) {
