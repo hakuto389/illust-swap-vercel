@@ -4,6 +4,7 @@ export type Stroke = {
   points: Point[];
   color: string;
   width: number;
+  tool: 'pencil' | 'pen' | 'brush' | 'marker' | 'eraser';
 };
 
 export type Player = {
